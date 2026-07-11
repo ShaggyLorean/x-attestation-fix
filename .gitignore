@@ -1,0 +1,14 @@
+# Build artifacts
+build/
+out/
+*.apk
+*.dex
+*.class
+
+# Keystore
+*.keystore
+*.jks
+
+# IDE
+.idea/
+*.iml
