@@ -77,21 +77,14 @@ You need:
 - Python 3
 
 ```bash
-# Set environment
-export ANDROID_JAR=$ANDROID_HOME/platforms/android-34/android.jar
-export BUILD_TOOLS=$ANDROID_HOME/build-tools/34.0.0
-
-# Place the original module APK as base.apk
-# (any LSPosed module APK with valid manifest will work as a template)
-cp /path/to/original-module.apk base.apk
-
-# Build
-./build.sh
-
-# Output: out/xbypass-fix-v1.0.apk
+# Put the original module APK at ./base.apk.
+# It provides the compiled manifest/resources expected by LSPosed.
+# Compile StrongBoxHook.java against the stubs, DEX only StrongBoxHook and its
+# anonymous callback class, then run:
+python3 package_v11.py
 ```
 
-The build reuses the original APK's `AndroidManifest.xml`, `resources.arsc`, and existing DEX files, appending the hook as `classes5.dex`. This is necessary because Xposed modules need a specific APK structure with `xposedmodule=true` in the manifest and `assets/xposed_init` pointing to the entry class.
+The build reuses the original APK's `AndroidManifest.xml`, `resources.arsc`, and existing DEX files, appending the hook as `classes5.dex`. This preserves the manifest metadata LSPosed expects while keeping the new hook in a unique class: `io.github.mara.xbypass.StrongBoxHook`.
 
 ## Technical details
 
@@ -191,6 +184,25 @@ This module demonstrates that X's backend accepts Android Key Attestation chains
 
 If this token is used as a device-integrity or anti-abuse signal, the backend is treating an explicitly unlocked device as trustworthy. This is a server-side policy decision — the server receives the boot state in the attestation extension and accepts it anyway.
 
+## Token lifetime and testing
+
+This is not an immediate kill switch for an already authenticated app process. The hook runs when X generates or refreshes Android Key Attestation material. Once X has a valid `HardwareAttestationToken`, it persists the token and its StrongBox key in app storage. Disabling the module therefore does not revoke that existing server-issued token, and signed actions such as replies can continue until X refreshes or expires it.
+
+When the cached token is missing or expired on a device with the affected TEE RKP failure, the difference is deterministic:
+
+- Module enabled: X takes the StrongBox path, obtains a token, and the signing gate passes.
+- Module disabled: X returns to TEE CSR v2, token generation fails, and the signing gate remains false.
+
+Do not clear application data merely to demonstrate this on an account you care about. That removes the session as well as the attestation state. A clean test profile or a natural token refresh is the safe way to test the transition.
+
+## Play Integrity versus StrongBox
+
+The module does not forge, modify, or replace Play Integrity results. It fixes Android Key Attestation key generation. Those are separate checks.
+
+The tested X flow still requests an Express Play Integrity token, so a device must satisfy whatever Play Integrity verdict X requires. There is no evidence from this test that `MEETS_STRONG_INTEGRITY` is required. The successful device was bootloader-unlocked and used a real StrongBox attestation chain with `deviceLocked=false` and orange verified boot; it would not qualify for genuine Strong Integrity.
+
+For portability, the hardware requirement is StrongBox support. The module is useful when StrongBox works but TEE CSR v2/RKP fails. A device with no StrongBox cannot use this fallback. A device whose normal TEE path works does not need it.
+
 ## Log output
 
 After installing, you can verify the module is working:
@@ -198,12 +210,8 @@ After installing, you can verify the module is working:
 ```
 $ adb logcat -s XAttestFix
 
-I/XAttestFix: loaded for com.twitter.android
-I/XAttestFix: hooked chain provider
-I/XAttestFix: hooked signing gate
-I/XAttestFix: generating StrongBox key for alias=... challenge=36b
-I/XAttestFix: StrongBox chain OK, certs=5
-I/XAttestFix: gate jf.x.com/onboarding/login/actions/username => true
+I/XAttestFix: StrongBox hook active
+I/XAttestFix: StrongBox chain generated: certs=5
 ```
 
 If you see `gate ... => false`, the token cache is still empty. Force-stop X and try again. The coordinator needs the app to be in the foreground to trigger token generation.
